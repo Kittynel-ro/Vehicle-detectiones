@@ -4,7 +4,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 
 from torchvision import datasets, transforms, models
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import precision_score, accuracy_score
 import os
 
@@ -43,11 +43,18 @@ def main():
     image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x),
                                               data_transforms[x])
                       for x in ['train']}
-    dataloaders = {x: DataLoader(image_datasets[x], batch_size=32,
-                                 shuffle=True, num_workers=4)
-                   for x in ['train']}
+    
+    dataset_size = len(image_datasets['train'])
+    train_size = int(0.8 * dataset_size)
+    val_size = dataset_size - train_size
+    train_dataset, val_dataset = random_split(image_datasets['train'], [train_size, val_size])
 
-    device = torch.device("cpu")
+    dataloaders = {
+            'train': DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4),
+            'val': DataLoader(val_dataset, batch_size=32, shuffle=True, num_workers=4)
+        }
+
+    device = torch.device("cuda")
 
     class BasicBlock(nn.Module):
         def __init__(self, in_channels, out_channels, stride=1):
@@ -108,13 +115,14 @@ def main():
             return x
 
     model = ResNet18(num_classes=2)
+    model.load_state_dict(torch.load('epoch_5.pth', weights_only=True))
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
-    num_epochs = 7
+    num_epochs = 1
 
     train_losses = []
     train_accuracies = []
@@ -144,8 +152,8 @@ def main():
             running_loss += loss.item() * inputs.size(0)
             running_corrects += torch.sum(preds == labels.data)
 
-        epoch_loss = running_loss / len(image_datasets['train'])
-        epoch_acc = running_corrects.double() / len(image_datasets['train'])
+        epoch_loss = running_loss / len(dataloaders['train'])
+        epoch_acc = running_corrects.double() / len(dataloaders['train'].dataset)
 
         train_losses.append(epoch_loss)
         train_accuracies.append(epoch_acc.item())
@@ -171,7 +179,7 @@ def main():
         ])
         # test data from https://www.kaggle.com/datasets/lyensoetanto/vehicle-images-dataset?resource=download
         test_dir = os.path.join("..", "data", "test")
-        test_data = datasets.ImageFolder(data_dir, transform=test_transforms)
+        test_data = datasets.ImageFolder(test_dir, transform=test_transforms)
         test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False)
         #model = ResNet18(num_classes=2)
 
@@ -179,6 +187,9 @@ def main():
         model.eval()
         all_labels = []
         all_preds = []
+
+        correct_vehicle = 0
+        correct_non_vehicle = 0 
 
         with torch.no_grad():
             for inputs, labels in test_loader:
@@ -191,8 +202,18 @@ def main():
                 all_labels.extend(labels.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
 
+                correct_vehicle += torch.sum((preds == labels) & (labels == 1)).item()
+                correct_non_vehicle += torch.sum((preds == labels) & (labels == 0)).item()
+
+
         accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, average='weighted')
+
         print(f'Test Accuracy: {accuracy:.4f}')
+        print(f'Test Precision: {precision:.4f}')
+
+        print(f'Correct Vehicle Predictions: {correct_vehicle}')
+        print(f'Correct Non-Vehicle Predictions: {correct_non_vehicle}')
 
 if __name__ == '__main__':
     main()
